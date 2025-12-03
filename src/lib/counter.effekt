@@ -1,0 +1,47 @@
+module src/lib/counter
+
+/// Simple record to hold counter statistics
+/// 
+/// O(1) space complexity, O(1) time complexity per update
+record Counter(sum: Double, sumSq: Double, count: Int)
+
+def empty(): Counter = {
+  Counter(0.0, 0.0, 0)
+}
+
+def add(counter: Counter, value: Double): Counter = {
+  Counter(
+    counter.sum + value,
+    counter.sumSq + value * value,
+    counter.count + 1
+  )
+}
+
+def remove(counter: Counter, value: Double): Counter = {
+  Counter(
+    counter.sum - value,
+    counter.sumSq - value * value,
+    counter.count - 1
+  )
+}
+
+def mean(counter: Counter): Double = {
+  if (counter.count == 0) {
+    0.0
+  } else {
+    counter.sum / counter.count.toDouble
+  }
+}
+
+def variance(counter: Counter): Double = {
+  if (counter.count == 0) {
+    0.0
+  } else {
+    val meanVal = mean(counter)
+    (counter.sumSq / counter.count.toDouble) - (meanVal * meanVal)
+  }
+}
+
+def stddev(counter: Counter): Double = {
+  sqrt(variance(counter))
+}
