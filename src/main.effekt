@@ -1,5 +1,8 @@
 module main // must be named same as the file!
 
-import src/lib
+import src/lib/aggregation
 
-def main(): Unit = println(helloWorld())
+
+def main(): Unit = {
+  examples::example2()
+}

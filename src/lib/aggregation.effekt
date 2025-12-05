@@ -119,16 +119,17 @@ def aggregateMean(): Unit / { read[Double], emit[Double] } = {
 def aggregateMeanWindow(windowSize: Int): Unit / { read[Double], emit[Double] } = {
   with boundary
   with on[OutOfBounds].panic()
-  val windowArr = array[Double](windowSize, 0.0) // Array to cycle through window values
+  val windowArr = array[Double](windowSize, negInfinity()) // Array to cycle through window values
   var counter = counter::empty()
   var index = 0
   while (true) {
     val value = do read[Double]()
-    counter = counter.counter::remove(windowArr.get(index))
-    counter = counter.counter::add(value)
+    if (windowArr.get(index) != negInfinity()) {
+      counter = counter.remove(windowArr.get(index))
+    }
+    counter = counter.add(value)
     windowArr.set(index, value)
-    val meanVal = counter.counter::mean()
-    do emit(meanVal)
+    do emit(counter.mean())
     index = mod(index + 1, windowSize) // will never be out of bounds due to mod
   }
 }
@@ -192,9 +193,9 @@ namespace examples {
 
   def example2(): Unit = {
     with on[MissingValue].panic()
-    var values: List[Double] = [2.0, 4.5, -1.5, 3.0, 7.25]
+    var values: List[Double] = [2.0, 4.0, 6.0, 8.0, 10.0]
     try {
-      aggregateMean()
+      aggregateMeanWindow(2)
     } with read[Double] { () =>
       if (values.isEmpty()) {
         println("No further input values; shutting down...")
@@ -206,7 +207,7 @@ namespace examples {
         resume { unbox next }
       }
     } with emit[Double] { meanVal =>
-      println("Running mean updated: " ++ meanVal.show())
+      println("Windowed mean: " ++ meanVal.show())
       resume(())
     }
   }
