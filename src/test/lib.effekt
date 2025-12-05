@@ -1,0 +1,47 @@
+module src/test/lib
+
+import stream
+import test
+
+def assertEmits[T](expected: List[T]) { equals: (T, T) => Bool } { program: () => Unit / emit[T] } : Unit / { Assertion } = {
+  var lst = expected
+  try {
+    program()
+  } with emit[T] { v =>
+    lst match {
+      case Nil() =>
+        assertTrue(false, "Emitted more values than expected")
+      case Cons(head, tail) =>
+        assertTrue(equals(head, v), "Emitted value did not match expected value")
+        lst = tail
+    }
+  }
+}
+
+def assertNoEmits[T] { program: () => Unit / emit[T] } : Unit / { Assertion } = {
+  try {
+    program()
+  } with emit[T] { v =>
+    assertTrue(false, "Emitted a value but no emits expected")
+  }
+}
+
+def assertReads[T](inputs: List[T]) { equals: (T, T) => Bool } { program: () => Unit / read[T] } : Unit / { Assertion } = {
+  with on[MissingValue].panic()
+  var lst = inputs
+  assertFalse(lst.isEmpty(), "assertReads requires a non empty list of inputs")
+  val someValue: T = lst.head() // dummy value to return when we run out of inputs (not used because of the failing assert but necessary for type checking)
+  try {
+    program()
+  } with read[T] { () =>
+    val r: T = lst match {
+      case Nil() =>
+        assertTrue(false, "Read more values than expected")
+        someValue // to satisfy type checker
+      case Cons(head, tail) =>
+        lst = tail
+        unbox head
+    }
+    resume { unbox r }
+  }
+}
