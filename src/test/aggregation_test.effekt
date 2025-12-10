@@ -2,84 +2,99 @@ module src/test/aggregation_test
 
 import test
 import src/lib/aggregation
+import src/lib/event
 import src/test/lib
+
+def eventsFromList(values: List[Double]): List[Event] = {
+  def loop(vals: List[Double], ts: Int): List[Event] = {
+    vals match {
+      case Nil() => Nil()
+      case Cons(h, t) => Cons(Event(ts, h), loop(t, ts + 1))
+    }
+  }
+  loop(values, 0)
+}
+
+def sameEvent(a: Event, b: Event): Bool = {
+  a.timestamp == b.timestamp && a.value == b.value
+}
 
 def testSuite() = suite("aggregation") {
   test("aggregate stream using min") {
-    val input = [5.3, 3.1, 8.6, 1.0, 4.0]
-    val expectedOutput = [5.3, 3.1, 3.1, 1.0, 1.0]
-    assertEmits[Double]( expectedOutput ) { (a, b) => a == b } {
-      assertReads[Double](input) { (a, b) => a == b } {
+    val input = eventsFromList([5.3, 3.1, 8.6, 1.0, 4.0])
+    val expectedOutput = eventsFromList([5.3, 3.1, 3.1, 1.0, 1.0])
+    assertEmits[Event]( expectedOutput ) { (a, b) => sameEvent(a, b) } {
+      assertReads[Event](input) { (a, b) => sameEvent(a, b) } {
         aggregation::aggregateMin()
       }
     }
   }
 
   test("aggregate stream using max") {
-    val input = [2.2, 4.5, 1.1, 6.3, 3.3]
-    val expectedOutput = [2.2, 4.5, 4.5, 6.3, 6.3]
-    assertEmits[Double]( expectedOutput ) { (a, b) => a == b } {
-      assertReads[Double](input) { (a, b) => a == b } {
+    val input = eventsFromList([2.2, 4.5, 1.1, 6.3, 3.3])
+    val expectedOutput = eventsFromList([2.2, 4.5, 4.5, 6.3, 6.3])
+    assertEmits[Event]( expectedOutput ) { (a, b) => sameEvent(a, b) } {
+      assertReads[Event](input) { (a, b) => sameEvent(a, b) } {
         aggregation::aggregateMax()
       }
     }
   }
 
   test("aggregate stream using mean") {
-    val input = [2.0, 4.0, 6.0, 8.0]
-    val expectedOutput = [2.0, 3.0, 4.0, 5.0]
-    assertEmits[Double]( expectedOutput ) { (a, b) => a == b } {
-      assertReads[Double](input) { (a, b) => a == b } {
+    val input = eventsFromList([2.0, 4.0, 6.0, 8.0])
+    val expectedOutput = eventsFromList([2.0, 3.0, 4.0, 5.0])
+    assertEmits[Event]( expectedOutput ) { (a, b) => sameEvent(a, b) } {
+      assertReads[Event](input) { (a, b) => sameEvent(a, b) } {
         aggregation::aggregateMean()
       }
     }
   }
 
   test("aggregate stream using median") {
-    val input = [1.0, 3.0, 5.0, 7.0, 9.0]
-    val expectedOutput = [1.0, 2.0, 3.0, 4.0, 5.0]
-    assertEmits[Double]( expectedOutput ) { (a, b) => a == b } {
-      assertReads[Double](input) { (a, b) => a == b } {
+    val input = eventsFromList([1.0, 3.0, 5.0, 7.0, 9.0])
+    val expectedOutput = eventsFromList([1.0, 2.0, 3.0, 4.0, 5.0])
+    assertEmits[Event]( expectedOutput ) { (a, b) => sameEvent(a, b) } {
+      assertReads[Event](input) { (a, b) => sameEvent(a, b) } {
         aggregation::aggregateMedian()
       }
     }
   }
 
   test("aggregate stream windowed using min") {
-    val input = [3.0, 5.0, 8.0, 1.0, 4.0, 6.0]
-    val expectedOutput = [3.0, 3.0, 5.0, 1.0, 1.0, 4.0]
-    assertEmits[Double]( expectedOutput ) { (a, b) => a == b } {
-      assertReads[Double](input) { (a, b) => a == b } {
+    val input = eventsFromList([3.0, 5.0, 8.0, 1.0, 4.0, 6.0])
+    val expectedOutput = eventsFromList([3.0, 3.0, 5.0, 1.0, 1.0, 4.0])
+    assertEmits[Event]( expectedOutput ) { (a, b) => sameEvent(a, b) } {
+      assertReads[Event](input) { (a, b) => sameEvent(a, b) } {
         aggregation::aggregateMinWindow(2)
       }
     }
   }
 
   test("aggregate stream windowed using max") {
-    val input = [2.0, 4.0, 1.0, 6.0, 3.0, 5.0]
-    val expectedOutput = [2.0, 4.0, 4.0, 6.0, 6.0, 5.0]
-    assertEmits[Double]( expectedOutput ) { (a, b) => a == b } {
-      assertReads[Double](input) { (a, b) => a == b } {
+    val input = eventsFromList([2.0, 4.0, 1.0, 6.0, 3.0, 5.0])
+    val expectedOutput = eventsFromList([2.0, 4.0, 4.0, 6.0, 6.0, 5.0])
+    assertEmits[Event]( expectedOutput ) { (a, b) => sameEvent(a, b) } {
+      assertReads[Event](input) { (a, b) => sameEvent(a, b) } {
         aggregation::aggregateMaxWindow(2)
       }
     }
   }
 
   test("aggregate stream windowed using mean") {
-    val input = [2.0, 4.0, 6.0, 8.0, 10.0]
-    val expectedOutput = [2.0, 3.0, 5.0, 7.0, 9.0]
-    assertEmits[Double]( expectedOutput ) { (a, b) => a == b } {
-      assertReads[Double](input) { (a, b) => a == b } {
+    val input = eventsFromList([2.0, 4.0, 6.0, 8.0, 10.0])
+    val expectedOutput = eventsFromList([2.0, 3.0, 5.0, 7.0, 9.0])
+    assertEmits[Event]( expectedOutput ) { (a, b) => sameEvent(a, b) } {
+      assertReads[Event](input) { (a, b) => sameEvent(a, b) } {
         aggregation::aggregateMeanWindow(2)
       }
     }
   }
 
   test("aggregate stream windowed using median") {
-    val input = [1.0, 3.0, 5.0, 7.0, 9.0]
-    val expectedOutput = [1.0, 2.0, 4.0, 6.0, 8.0]
-    assertEmits[Double]( expectedOutput ) { (a, b) => a == b } {
-      assertReads[Double](input) { (a, b) => a == b } {
+    val input = eventsFromList([1.0, 3.0, 5.0, 7.0, 9.0])
+    val expectedOutput = eventsFromList([1.0, 2.0, 4.0, 6.0, 8.0])
+    assertEmits[Event]( expectedOutput ) { (a, b) => sameEvent(a, b) } {
+      assertReads[Event](input) { (a, b) => sameEvent(a, b) } {
         aggregation::aggregateMedianWindow(2)
       }
     }
