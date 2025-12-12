@@ -1,0 +1,175 @@
+module src/lib/anomaly_detection
+
+import src/lib/event
+import src/lib/counter
+
+/// Result of evaluating an event for anomalies
+///
+/// event: The original event that was evaluated
+/// isAnomaly: True if the event was classified as an anomaly
+/// anomalyScore: Numeric score indicating anomaly severity (0.0 if not anomalous)
+record AnomalyEvaluation (
+  event: Event,
+  isAnomaly: Bool,
+  anomalyScore: Double
+)
+
+/// Check equality of two AnomalyEvaluation records
+///
+/// Performs a field-by-field equality check (timestamp, value, anomaly flag, score)
+def equals(a: AnomalyEvaluation, b: AnomalyEvaluation): Bool = {
+  a.event.timestamp == b.event.timestamp &&
+  a.event.value == b.event.value &&
+  a.isAnomaly == b.isAnomaly &&
+  a.anomalyScore == b.anomalyScore
+}
+
+/// Interface that consumers implement to handle anomaly detection results
+interface AnomalyDetection {
+  def anomaly(event: AnomalyEvaluation): Unit
+  def noAnomaly(event: AnomalyEvaluation): Unit
+}
+
+/// Detect anomalies by checking whether the value is outside a fixed range
+///
+/// For each incoming event, the detector emits an `AnomalyEvaluation`If the event value is
+/// less than `min` or greater than `max`, the event is flagged as an anomaly and the `anomalyScore`
+/// is the distance outside of the range. Otherwise it is considered normal and receives a score of `0.0`.
+///
+/// O(1) space complexity, O(1) time complexity per read
+def minMaxAnomalyDetector(min: Double, max: Double): Unit / { read[Event], AnomalyDetection } = {
+  with boundary
+  while (true) {
+    val ev = do read[Event]()
+    val value = ev.value
+    if (value < min || value > max) {
+      do anomaly(AnomalyEvaluation(ev, true, if (value < min) min - value else value - max))
+    } else {
+      do noAnomaly(AnomalyEvaluation(ev, false, 0.0))
+    }
+  }
+}
+
+/// Detect anomalies by comparing deviation from the running mean to a fixed threshold
+///
+/// The detector keeps a running `Counter` to compute the mean of the observed values. For each
+/// event it computes the absolute deviation from the current mean and flags the event as an
+/// anomaly if the absolute deviation exceeds the provided `threshold`. The anomaly score is the deviation
+/// and can be positive or negative depending on whether the value is above or below the mean.
+///
+/// O(1) space complexity, O(1) time complexity per read
+def meanThresholdAnomalyDetector(threshold: Double): Unit / { read[Event], AnomalyDetection } = {
+  with boundary
+  var count = counter::empty()
+  while (true) {
+    val ev = do read[Event]()
+    val value = ev.value
+    count = count.add(value)
+    val deviation = value - count.mean()
+    if (abs(deviation) > threshold) {
+      do anomaly(AnomalyEvaluation(ev, true, deviation))
+    } else {
+      do noAnomaly(AnomalyEvaluation(ev, false, deviation))
+    }
+  }
+}
+
+/// Detect anomalies using z-score relative to the running mean and standard deviation
+///
+/// The detector maintains a `Counter` to compute running mean and standard deviation. For each
+/// event it computes the z-score as `(value - mean) / stddev` and flags an event as anomalous if
+/// absolute z-score exceeds `zThreshold`. If `stddev` is 0 the detector treats the z-score as 0. The
+/// `anomalyScore` is the computed z-score and can be positive or negative.
+///
+/// O(1) space complexity, O(1) time complexity per read
+def zScoreAnomalyDetector(zThreshold: Double): Unit / { read[Event], AnomalyDetection } = {
+  with boundary
+  var count = counter::empty()
+  while (true) {
+    val ev = do read[Event]()
+    val value = ev.value
+    count = count.add(value)
+    val mean = count.mean()
+    val stddev = count.stddev()
+    val zScore = if (stddev == 0.0) 0.0 else (value - mean) / stddev
+    if (abs(zScore) > zThreshold) {
+      do anomaly(AnomalyEvaluation(ev, true, zScore))
+    } else {
+      do noAnomaly(AnomalyEvaluation(ev, false, zScore))
+    }
+  }
+}
+
+
+namespace examples {
+  def example1(): Unit = {
+    with on[MissingValue].panic()
+    var lst: List[Event] = [
+      Event(1, 1.0),
+      Event(2, 3.0),
+      Event(3, 6.0),
+      Event(4, 0.5),
+      Event(5, 4.0),
+      Event(6, -1.0),
+      Event(7, 3.0)
+    ]
+    try {
+      minMaxAnomalyDetector(0.0, 5.0)
+    } with read[Event] { () =>
+      if (lst.isEmpty()) {
+        println("No more values to read, stopping...")
+        resume { do stop() }
+      } else {
+        val first = lst.head()
+        lst = lst.deleteAt(0)
+        println("Providing value: " ++ first.value.show())
+        resume { unbox first }
+      }
+    } with AnomalyDetection { 
+      def anomaly(ev: AnomalyEvaluation) = {
+        println("Anomaly detected: " ++ ev.event.value.show() ++ " at t=" ++ ev.event.timestamp.show() ++
+                " (score: " ++ ev.anomalyScore.show() ++ ")")
+        resume(())
+      }
+      def noAnomaly(ev: AnomalyEvaluation) = {
+        println("No anomaly: " ++ ev.event.value.show() ++ " at t=" ++ ev.event.timestamp.show())
+        resume(())
+      }
+    }
+  }
+
+  def example2(): Unit = {
+    with on[MissingValue].panic()
+    var lst: List[Event] = [
+      Event(1, 1.0),
+      Event(2, 3.0),
+      Event(3, 6.0),
+      Event(4, 0.5),
+      Event(5, 4.0),
+      Event(6, -1.0),
+      Event(7, 3.0)
+    ]
+    try {
+      zScoreAnomalyDetector(1.0)
+    } with read[Event] { () =>
+      if (lst.isEmpty()) {
+        println("No more values to read, stopping...")
+        resume { do stop() }
+      } else {
+        val first = lst.head()
+        lst = lst.deleteAt(0)
+        println("Providing value: " ++ first.value.show())
+        resume { unbox first }
+      }
+    } with AnomalyDetection { 
+      def anomaly(ev: AnomalyEvaluation) = {
+        println("Anomaly detected: " ++ ev.event.value.show() ++ " at t=" ++ ev.event.timestamp.show() ++ " (score: " ++ ev.anomalyScore.show() ++ ")")
+        resume(())
+      }
+      def noAnomaly(ev: AnomalyEvaluation) = {
+        println("No anomaly: " ++ ev.event.value.show() ++ " at t=" ++ ev.event.timestamp.show() ++ " (score: " ++ ev.anomalyScore.show() ++ ")")
+        resume(())
+      }
+    }
+  }
+}

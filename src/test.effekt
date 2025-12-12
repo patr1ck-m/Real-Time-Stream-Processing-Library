@@ -3,10 +3,12 @@ module src/test
 import process
 import test
 import src/test/aggregation_test
+import src/test/anomaly_detection_test
 
 def main() = {
   val testResults = [
-    aggregation_test::testSuite()
+    aggregation_test::testSuite(),
+    anomaly_detection_test::testSuite()
   ]
   val allPassed = testResults.all { res => res }
   val exitCode = if (allPassed) 0 else 1
