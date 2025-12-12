@@ -1,0 +1,287 @@
+module src/lib/aggregation
+
+import stream
+import array
+import list
+import src/lib/counter
+import src/lib/event
+
+// FFI to define infinity and negative infinity
+extern def infinity: Double =
+  js "Infinity"
+
+extern def negInfinity: Double =
+  js "-Infinity"
+
+
+/// Aggregate the minimum value from an unbounded stream of events
+/// 
+/// O(1) space complexity, O(1) time complexity per read
+def aggregateMin(): Unit / { read[Event], emit[Event] } = {
+  with boundary
+  var min = infinity()
+  while (true) {
+    println("Reading new event...")
+    val ev = do read[Event]()
+    val value = ev.value
+    if (value < min) {
+      min = value
+      println("Emitting new min...")
+    }
+    do emit(Event(ev.timestamp, min))
+  }
+}
+
+/// Aggregate the minimum value over a sliding window of given size
+/// 
+/// O(windowSize) space complexity, O(1) time complexity on average per read
+def aggregateMinWindow(windowSize: Int) : Unit / { read[Event], emit[Event] } = {
+  with boundary
+  with on[OutOfBounds].panic()
+  val windowArr = array[Double](windowSize, infinity()) // Array to cycle through window values
+  var min = infinity()
+  var index = 0
+  while (true) {
+    val ev = do read[Event]()
+    val value = ev.value
+    if (windowArr.get(index) == min) {
+      // Recompute min
+      windowArr.set(index, value)
+      min = internal::arrMin(windowArr)
+    } else {
+      // No recomputation needed, only check new value
+      if (value < min) {
+        min = value
+        windowArr.set(index, value)
+      } else {
+        windowArr.set(index, value)
+      }
+    }
+    do emit(Event(ev.timestamp, min))
+    index = mod(index + 1, windowSize) // will never be out of bounds due to mod
+  }
+}
+
+/// Aggregate the maximum value from an unbounded stream of events
+/// 
+/// O(1) space complexity, O(1) time complexity per read
+def aggregateMax(): Unit / { read[Event], emit[Event] } = {
+  with boundary
+  var max = negInfinity()
+  while (true) {
+    val ev = do read[Event]()
+    val value = ev.value
+    if (value > max) {
+      max = value
+    }
+    do emit(Event(ev.timestamp, max))
+  }
+}
+
+/// Aggregate the maximum value over a sliding window of given size
+/// 
+/// O(windowSize) space complexity, O(1) time complexity on average per read
+def aggregateMaxWindow(windowSize: Int) : Unit / { read[Event], emit[Event] } = {
+  with boundary
+  with on[OutOfBounds].panic()
+  val windowArr = array[Double](windowSize, negInfinity()) // Array to cycle through window values
+  var max = negInfinity()
+  var index = 0
+  while (true) {
+    val ev = do read[Event]()
+    val value = ev.value
+    if (windowArr.get(index) == max) {
+      // Recompute max -> O(windowSize)
+      windowArr.set(index, value)
+      max = internal::arrMax(windowArr)
+    } else {
+      // No recomputation needed, only check new value -> O(1)
+      if (value > max) {
+        max = value
+        windowArr.set(index, value)
+      } else {
+        windowArr.set(index, value)
+      }
+    }
+    do emit(Event(ev.timestamp, max))
+    index = mod(index + 1, windowSize) // will never be out of bounds due to mod
+  }
+}
+
+/// Aggregate the mean value from an unbounded stream of events
+/// 
+/// O(1) space complexity, O(1) time complexity per read
+def aggregateMean(): Unit / { read[Event], emit[Event] } = {
+  with boundary
+  var counter: Counter = counter::empty()
+  while (true) {
+    val ev = do read[Event]()
+    val value = ev.value
+    counter = counter.add(value)
+    val meanVal = counter.mean()
+    do emit(Event(ev.timestamp, meanVal))
+  }
+}
+
+/// Aggregate the mean value over a sliding window of given size
+/// 
+/// O(windowSize) space complexity, O(1) time complexity per read
+def aggregateMeanWindow(windowSize: Int): Unit / { read[Event], emit[Event] } = {
+  with boundary
+  with on[OutOfBounds].panic()
+  val windowArr = array[Double](windowSize, negInfinity()) // Array to cycle through window values
+  var counter = counter::empty()
+  var index = 0
+  while (true) {
+    val ev = do read[Event]()
+    val value = ev.value
+    if (windowArr.get(index) != negInfinity()) {
+      counter = counter.remove(windowArr.get(index))
+    }
+    counter = counter.add(value)
+    windowArr.set(index, value)
+    do emit(Event(ev.timestamp, counter.mean()))
+    index = mod(index + 1, windowSize) // will never be out of bounds due to mod
+  }
+}
+
+/// Aggregate the median value from an unbounded stream of events
+/// 
+/// O(n) space complexity, O(n log n) time complexity per read
+def aggregateMedian(): Unit / { read[Event], emit[Event] } = {
+  with boundary
+  with on[OutOfBounds].panic()
+  val windowList: List[Double] = empty[Double]()
+  var lst = windowList
+  while (true) {
+    val ev = do read[Event]()
+    lst = Cons(ev.value, lst)
+    val medianVal = internal::listMedian(lst)
+    do emit(Event(ev.timestamp, medianVal))
+  }
+}
+
+/// Aggregate the median value over a sliding window of given size
+/// 
+/// O(windowSize) space complexity, O(n log n) time complexity per read
+def aggregateMedianWindow(windowSize: Int): Unit / { read[Event], emit[Event] } = {
+  with boundary
+  with on[OutOfBounds].panic()
+  var lst: List[Double] = empty[Double]()
+  while (true) {
+    val ev = do read[Event]()
+    lst = Cons(ev.value, lst)
+    if (lst.size() > windowSize) {
+      lst = lst.deleteAt(lst.size() - 1) // remove oldest element
+    }
+    val medianVal = internal::listMedian(lst)
+    do emit(Event(ev.timestamp, medianVal))
+  }
+}
+
+
+namespace examples {
+  def example1(): Unit = {
+    with on[MissingValue].panic()
+    var lst: List[Event] = [
+      Event(1, 1.0),
+      Event(2, 3.0),
+      Event(3, 2.0),
+      Event(4, 0.5),
+      Event(5, 4.0),
+      Event(6, -1.0),
+      Event(7, 5.0)
+    ]
+    try {
+      aggregateMin()
+    } with read[Event] { () =>
+      if (lst.isEmpty()) {
+        println("No more values to read, stopping...")
+        resume { do stop() }
+      } else {
+        val first = lst.head()
+        lst = lst.deleteAt(0)
+        println("Providing value: " ++ first.value.show())
+        resume { unbox first }
+      }
+    } with emit[Event] { ev =>
+      println("New min: " ++ ev.value.show() ++ " at t=" ++ ev.timestamp.show())
+      resume(())
+    }
+  }
+
+  def example2(): Unit = {
+    with on[MissingValue].panic()
+    var values: List[Event] = [
+      Event(10, 2.0),
+      Event(11, 4.0),
+      Event(12, 6.0),
+      Event(13, 8.0),
+      Event(14, 10.0)
+    ]
+    try {
+      aggregateMeanWindow(2)
+    } with read[Event] { () =>
+      if (values.isEmpty()) {
+        println("No further input values; shutting down...")
+        resume { do stop() }
+      } else {
+        val next = values.head()
+        values = values.deleteAt(0)
+        println("Sending input: " ++ next.value.show())
+        resume { unbox next }
+      }
+    } with emit[Event] { meanEv =>
+      println("Windowed mean: " ++ meanEv.value.show() ++ " at t=" ++ meanEv.timestamp.show())
+      resume(())
+    }
+  }
+}
+
+namespace internal {
+  /// Helper function to compute the minimum of an array
+  /// 
+  /// O(n) time complexity
+  def arrMin(arr: Array[Double]): Double = {
+    var min = infinity()
+    arr.foreach { v =>
+      if (v < min) {
+        min = v
+      }
+    }
+    min
+  }
+
+  /// Helper function to compute the maximum of an array
+  /// 
+  /// O(n) time complexity
+  def arrMax(arr: Array[Double]): Double = {
+    var max = negInfinity()
+    arr.foreach { v =>
+      if (v > max) {
+        max = v
+      }
+    }
+    max
+  }
+
+  /// Helper function to compute the median of a list
+  /// 
+  /// O(n log n) time complexity due to sorting
+  def listMedian(lst: List[Double]): Double = {
+    with on[OutOfBounds].panic()
+    val sortedLst = lst.sort()
+    val len = sortedLst.size()
+    if (mod(len, 2) == 1) {
+      // Odd length
+      val idx = len / 2
+      sortedLst.get(idx)
+    } else {
+      // Even length
+      val idx = len / 2
+      val mid1 = sortedLst.get(idx - 1)
+      val mid2 = sortedLst.get(idx)
+      (mid1 + mid2) / 2.0
+    }
+  }
+}

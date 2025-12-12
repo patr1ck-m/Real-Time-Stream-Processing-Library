@@ -1,0 +1,6 @@
+module src/lib/event
+
+record Event (
+  timestamp: Int,
+  value: Double
+)
