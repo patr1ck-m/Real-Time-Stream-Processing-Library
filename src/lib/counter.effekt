@@ -34,11 +34,10 @@ def mean(counter: Counter): Double = {
 }
 
 def variance(counter: Counter): Double = {
-  if (counter.count == 0) {
+  if (counter.count <= 1) {
     0.0
   } else {
-    val meanVal = mean(counter)
-    (counter.sumSq / counter.count.toDouble) - (meanVal * meanVal)
+    (1.0 / (counter.count.toDouble - 1.0)) * (counter.sumSq - (counter.sum * counter.sum) / counter.count.toDouble)
   }
 }
 
