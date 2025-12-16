@@ -1,0 +1,287 @@
+/*
+
+Most of the code is from @jiribenes: https://gist.github.com/jiribenes/a5091702361c189f0d10dcdd98e036cc
+
+Some functions added (marked in this file) since library finctionality existed a year ago doesn't exist in the standard library any more.
+Furthermore some more small changes to fix compatibility issues with the current Effekt version.
+
+*/
+
+/// like 'json', but for 'csv'; what's not to love? :^)
+module csv
+
+// current 'scanner' as of 2024-12-03 22:00 and its stream:
+import scanner
+import stream
+import string
+
+
+/*
+-----------------------------------------------
+--- The following part is written by myself ---
+-----------------------------------------------
+*/
+
+
+def collectList[T, R]{ body: => R / { emit[T] } }: (R, List[T]) = {
+  var lst: List[T] = Nil()
+  val r: R = try body() with emit[T] {
+    def emit(v: T) = {
+      lst = Cons(v, lst)
+      resume(())
+    }
+  }
+  (r, lst.reverse)
+}
+
+def collectList[T]{ body: => Unit / { emit[T] } }: List[T] = {
+  val (_, lst) = collectList[T, Unit] { body }
+  lst
+}
+
+def collectString{ body: => Unit / { emit[Char] } }: String = {
+  val (_, chars) = collectList[Char, Unit] { body }
+  var str = ""
+  chars.foreach { c => str = str ++ c.show() }
+  str
+}
+
+/*
+---------------------------------------------------
+--- The following part is written by @jiribenes ---
+---------------------------------------------------
+*/
+
+
+interface RowBuilder {
+  def cell(s: String): Unit
+}
+
+interface CsvBuilder {
+  def rows[R]{ cells: => R / RowBuilder }: R
+}
+
+type CsvRow = List[String]
+type CsvValue = List[CsvRow]
+
+def build[R] { body: => R / CsvBuilder }: (R, CsvValue) = {
+  var csvrows: List[CsvRow] = []
+  val r: R = try body() with CsvBuilder {
+    def rows() = resume { {row} =>
+      val (ret, csvrow) = buildRow {row}
+      csvrows = Cons(csvrow, csvrows)
+      ret
+    }
+  }
+  (r, csvrows.reverse)
+}
+
+def buildRow[R] { body: => R / RowBuilder }: (R, CsvRow) = {
+  with collectList[String, R]
+  try body() with RowBuilder {
+    def cell(s) = { do emit(s); resume(()) }
+  }
+}
+
+def unbuild(v: CsvValue): Unit / CsvBuilder = v match {
+  case rows => rows.foreach { row =>
+    do rows { 
+      row.foreach { cell =>
+        do cell(cell) 
+      }
+    }
+  }
+}
+
+def readUntil { shouldStop: Char => Bool }: String / Scan[Char] = 
+  collectString { readWhile[Char] { c => not(shouldStop(c)) } }
+
+/// Read and unescape a string in ""
+/// Stolen from 'json'
+def readQuotedString(): Unit / { Scan[Char], emit[Char], Exception[WrongFormat] } = {
+  try {
+    expect("Expected \"") { readIf('"') }
+    while(read[Char]() is c and c != '"') {
+      c match {
+        case '\\' => read[Char]() match {
+          case '"' => do emit('\"')
+          case '\\' => do emit('\\')
+          case '/' => do emit('/')
+          case 'b' => <>
+          case 'f' => <>
+          case 'n' => do emit('\n')
+          case 'r' => do emit('\r')
+          case 't' => do emit('\t')
+          case c => wrongFormat("Invalid escape sequence '\\" ++ c.toString ++ "'")
+        }
+        case o => do emit(o)
+      }
+    }
+  } with stop {
+    wrongFormat("Unexpected end of input while reading a string")
+  }
+}
+
+def decodeRow(): Unit / {Scan[Char], RowBuilder, Exception[WrongFormat]} = exhaustively {
+  val cell = readUntil { c => c == ',' || c == '\n' || c == '"' }
+  do cell(cell)
+
+  do peek[Char]() match {
+    case ','  => do skip[Char]()
+    case '\n' =>
+      do skip[Char]()
+      do stop()
+    case '"'  =>
+      do cell(collectString { readQuotedString() })
+    case c    =>
+      wrongFormat("csv::decodeRow: Unknown character '" ++ c.toString ++ "'")
+  }
+}
+
+def decodeCsv(): Unit / {Scan[Char], CsvBuilder, Exception[WrongFormat]} = exhaustively {
+  do peek[Char]() match {
+    case '\n' => 
+      // do skip[Char]()
+      do rows { decodeRow() } // technically could be `do rows { () }`
+    case _ => 
+      do rows { decodeRow() }
+  }
+  // QUESTION TODO: Why doesn't just this work instead of the match, huh?!
+  do rows { decodeRow() }
+}
+
+def encodeCsv[R] { csv: => R / CsvBuilder }: R / emit[String] = {
+  var first = true
+  def sep() = {
+    if (not(first)) do emit("\n")
+    first = false
+  }
+
+  try csv() with CsvBuilder {
+    def rows() = resume { {row} => 
+      sep(); encodeRow {row}
+    }
+  }
+}
+
+def encodeRow[R] { row: => R / RowBuilder }: R / emit[String] = {
+  var first = true
+  def sep() = {
+    if (not(first)) do emit(",")
+    first = false
+  }
+
+  try row() with RowBuilder { // TODO: quoting?!
+    def cell(s) = { sep(); do emit(s); resume(()) } 
+  }
+}
+
+// TODO: should this "rethrow" 'CsvBuilder' to allow for use like `build { with validate; ... }`?
+def validate[R] { csv: => R / CsvBuilder }: R / Exception[WrongFormat] = {
+  var previousCells = None()
+  var rowNumber = 0
+
+  try csv() with CsvBuilder {
+    def rows() = resume { {r} =>
+      rowNumber = rowNumber + 1
+
+      var cells = 0
+      var lastCell = None()
+      val ret = try r() with RowBuilder {
+        def cell(s) = {
+          cells = cells + 1
+          lastCell = Some(s)
+
+          resume(())
+        }
+      }
+
+      if (lastCell is Some("") and cells == 1) {
+        wrongFormat("Empty row number " ++ show(rowNumber) ++ "!")
+      }
+
+      if (previousCells is None()) {
+        previousCells = Some(cells)
+      } else if (previousCells is Some(c) and cells != c) {
+        wrongFormat("Row number " ++ show(rowNumber) ++ " has too many / too few cells! Previous row has " ++ show(c) ++ " cells, but this row has " ++ show(cells) ++ "!")
+      }
+
+      ret
+    }
+  }
+}
+
+def getColumnOf[R](columnName: String) { csv: => R / CsvBuilder }: R / {emit[String], Exception[WrongFormat]} = {
+  var columnId = None()
+  try csv() with CsvBuilder {
+    def rows() = resume { {r} =>
+      var currentColumn = 0
+      val ret = try r() with RowBuilder {
+        def cell(s) = {
+          currentColumn = currentColumn + 1
+          if (columnId is None() and s == columnName) {
+            columnId = Some(currentColumn)
+          } else if (columnId is Some(c) and c == currentColumn) {
+            do emit(s)
+          }
+          resume(())
+        }
+      }
+      // it's the first iteration and we haven't found a column yet!
+      if (columnId is None()) {
+        wrongFormat("Header doesn't have the given column name: " ++ columnName)
+      }
+      ret
+    }
+  }
+}
+
+
+def main() = {
+  with on[WrongFormat].report
+
+  val csv: CsvValue = [["name", "age"], ["John", "42"], ["Joe", "10"], ["Jolene", "27"]]
+  val csvAgain = build {
+    csv.unbuild
+  }.second
+  inspect(csvAgain)
+
+  inspect(on[WrongFormat].result { validate { csv.unbuild } })
+
+  // Empty row!
+  val realCsv = ",name,age\n\n,John,42\n,Joe,10\n,Jolene,27"
+  val res = feed(realCsv) {
+    with returning::scanner[Char, CsvValue]
+    build { decodeCsv() }.second
+  }
+  inspect(res)
+  inspect(on[WrongFormat].result { validate { res.unbuild } })
+  inspect(on[WrongFormat].panic { collectList[String] { getColumnOf("age") { res.unbuild } } })
+
+  def averageOf(columnName: String) { csv: () => Unit / CsvBuilder }: Option[Double] = {
+    with on[WrongFormat].option
+    var counter = 0
+    var total = 0
+    for[String] { getColumnOf("age") {csv} } { age =>
+      counter = counter + 1
+      total = total + age.toInt
+    }
+    total.toDouble / counter.toDouble
+  }
+  println(averageOf("age") { res.unbuild })
+
+  val csvString: String = collectList[String] {
+    encodeCsv {
+      unbuild(csv)
+    }
+  }.join("")
+
+  println(csvString)
+
+  val realCsvString: String = collectList[String] {
+  encodeCsv {
+    unbuild(res)
+  }
+  }.join("")
+  println(realCsvString)
+}
