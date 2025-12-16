@@ -21,12 +21,10 @@ def aggregateMin(): Unit / { read[Event], emit[Event] } = {
   with boundary
   var min = infinity()
   while (true) {
-    println("Reading new event...")
     val ev = do read[Event]()
     val value = ev.value
     if (value < min) {
       min = value
-      println("Emitting new min...")
     }
     do emit(Event(ev.timestamp, min))
   }
